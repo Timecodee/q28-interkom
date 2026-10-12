@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.net.Uri;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -15,10 +16,12 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.VideoView;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
@@ -48,7 +51,10 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView logView;
     private ImageView preview;
+    private VideoView videoView;
     private volatile boolean streaming;
+    private String[] rtspCandidates = new String[0];
+    private int rtspIndex;
 
     private static final String[] HTTP_PATHS = new String[] {
             "/",
@@ -75,6 +81,20 @@ public class MainActivity extends Activity {
 
     private static final int[] PORTS = new int[] {80, 8080, 8081, 554, 8554, 7070, 7878, 3333};
     private static final int[] HTTP_PORTS = new int[] {8080, 8081, 80};
+    private static final String[] RTSP_PATHS = new String[] {
+            "/",
+            "/live",
+            "/stream",
+            "/video",
+            "/videostream",
+            "/h264",
+            "/0",
+            "/1",
+            "/ch0_0.264",
+            "/ch1_0.264",
+            "/cam1/h264",
+            "/11"
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -153,10 +173,43 @@ public class MainActivity extends Activity {
         gpcamParams.setMargins(dp(8), 0, 0, 0);
         diagButtons.addView(gpcam, gpcamParams);
 
+        LinearLayout rtspButtons = new LinearLayout(this);
+        rtspButtons.setOrientation(LinearLayout.HORIZONTAL);
+        rtspButtons.setPadding(0, 0, 0, dp(12));
+        root.addView(rtspButtons, new LinearLayout.LayoutParams(-1, -2));
+
+        Button rtspProbe = button("RTSP probe");
+        rtspProbe.setOnClickListener(v -> rtspProbe());
+        rtspButtons.addView(rtspProbe, new LinearLayout.LayoutParams(0, dp(48), 1));
+
+        Button rtspPlay = button("RTSP oynat");
+        rtspPlay.setOnClickListener(v -> playRtsp());
+        LinearLayout.LayoutParams rtspPlayParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+        rtspPlayParams.setMargins(dp(8), 0, 0, 0);
+        rtspButtons.addView(rtspPlay, rtspPlayParams);
+
+        FrameLayout playerFrame = new FrameLayout(this);
         preview = new ImageView(this);
         preview.setBackgroundColor(Color.rgb(15, 23, 42));
         preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        root.addView(preview, new LinearLayout.LayoutParams(-1, 0, 1));
+        playerFrame.addView(preview, new FrameLayout.LayoutParams(-1, -1));
+
+        videoView = new VideoView(this);
+        videoView.setBackgroundColor(Color.rgb(15, 23, 42));
+        videoView.setVisibility(View.GONE);
+        videoView.setOnPreparedListener(mp -> {
+            setStatus("RTSP oynuyor.");
+            append("RTSP hazir: " + currentRtspUrl());
+            mp.setOnVideoSizeChangedListener((player, width, height) -> append("RTSP video size=" + width + "x" + height));
+            videoView.start();
+        });
+        videoView.setOnErrorListener((mp, what, extra) -> {
+            append("RTSP hata: what=" + what + " extra=" + extra + " url=" + currentRtspUrl());
+            playNextRtspCandidate();
+            return true;
+        });
+        playerFrame.addView(videoView, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(playerFrame, new LinearLayout.LayoutParams(-1, 0, 1));
 
         ScrollView scroll = new ScrollView(this);
         logView = new TextView(this);
@@ -325,6 +378,59 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void rtspProbe() {
+        String host = hostInput.getText().toString().trim();
+        setStatus("RTSP probe yapiliyor...");
+        worker.submit(() -> {
+            Network wifi = bindToWifiNetwork();
+            if (wifi == null) {
+                setStatus("Q28 WiFi agi uygulamaya baglanamadi.");
+                appendNetworkState();
+                return;
+            }
+
+            for (String path : RTSP_PATHS) {
+                String url = "rtsp://" + host + ":8080" + path;
+                String options = rawRtspProbe(wifi, host, 8080, "OPTIONS", url);
+                append(options);
+                if (options.contains(" 200 ") || options.contains("Public:")) {
+                    append(rawRtspProbe(wifi, host, 8080, "DESCRIBE", url));
+                }
+            }
+            setStatus("RTSP probe tamamlandi.");
+        });
+    }
+
+    private void playRtsp() {
+        String host = hostInput.getText().toString().trim();
+        setStatus("RTSP oynatma deneniyor...");
+        worker.submit(() -> {
+            Network wifi = bindToWifiNetwork();
+            if (wifi == null) {
+                setStatus("Q28 WiFi agi uygulamaya baglanamadi.");
+                appendNetworkState();
+                return;
+            }
+            append(NativeLoader.load());
+            try {
+                CamWrapper wrapper = CamWrapper.getComWrapperInstance();
+                int connect = wrapper.GPCamConnectToDevice(host, 0);
+                append("RTSP oncesi GPCam connect ret=" + connect);
+                append("RTSP oncesi RestartStreaming=" + wrapper.GPCamSendRestartStreaming());
+            } catch (Throwable t) {
+                append("RTSP oncesi GPCam hata: " + t.getClass().getSimpleName() + " " + safe(t.getMessage()));
+            }
+
+            List<String> urls = new ArrayList<>();
+            for (String path : RTSP_PATHS) {
+                urls.add("rtsp://" + host + ":8080" + path);
+            }
+            rtspCandidates = urls.toArray(new String[0]);
+            rtspIndex = 0;
+            main.post(this::playCurrentRtspCandidate);
+        });
+    }
+
     private Network bindToWifiNetwork() {
         ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         if (cm == null) {
@@ -373,6 +479,61 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             return "RAW " + port + " hata: " + t.getClass().getSimpleName() + " " + safe(t.getMessage());
         }
+    }
+
+    private String rawRtspProbe(Network network, String host, int port, String method, String url) {
+        SocketFactory socketFactory = network.getSocketFactory();
+        try (Socket socket = socketFactory.createSocket()) {
+            socket.connect(new InetSocketAddress(host, port), 1000);
+            socket.setSoTimeout(1200);
+
+            OutputStream out = socket.getOutputStream();
+            String request = method + " " + url + " RTSP/1.0\r\n"
+                    + "CSeq: 1\r\n"
+                    + "User-Agent: Q28Interkom/0.5\r\n"
+                    + (method.equals("DESCRIBE") ? "Accept: application/sdp\r\n" : "")
+                    + "\r\n";
+            out.write(request.getBytes());
+            out.flush();
+
+            InputStream in = socket.getInputStream();
+            byte[] buffer = new byte[512];
+            int read = in.read(buffer);
+            if (read <= 0) {
+                return "RTSP " + method + " " + url + ": veri yok";
+            }
+            return "RTSP " + method + " " + url + " len=" + read + " ascii=" + toAscii(buffer, read);
+        } catch (Throwable t) {
+            return "RTSP " + method + " " + url + " hata: " + t.getClass().getSimpleName() + " " + safe(t.getMessage());
+        }
+    }
+
+    private void playCurrentRtspCandidate() {
+        if (rtspIndex >= rtspCandidates.length) {
+            setStatus("RTSP adaylari bitti.");
+            preview.setVisibility(View.VISIBLE);
+            videoView.setVisibility(View.GONE);
+            return;
+        }
+        String url = rtspCandidates[rtspIndex];
+        append("RTSP oynatiliyor: " + url);
+        preview.setVisibility(View.GONE);
+        videoView.setVisibility(View.VISIBLE);
+        videoView.stopPlayback();
+        videoView.setVideoURI(Uri.parse(url));
+        videoView.start();
+    }
+
+    private void playNextRtspCandidate() {
+        rtspIndex++;
+        main.postDelayed(this::playCurrentRtspCandidate, 450);
+    }
+
+    private String currentRtspUrl() {
+        if (rtspCandidates.length == 0 || rtspIndex >= rtspCandidates.length) {
+            return "";
+        }
+        return rtspCandidates[rtspIndex];
     }
 
     private boolean tryMjpeg(Network network, String urlString) {
