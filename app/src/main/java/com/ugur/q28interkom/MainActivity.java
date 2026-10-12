@@ -47,17 +47,30 @@ public class MainActivity extends Activity {
     private volatile boolean streaming;
 
     private static final String[] HTTP_PATHS = new String[] {
+            "/",
+            "/index.html",
             "/?action=stream",
             "/videostream.cgi",
+            "/video.cgi",
+            "/mjpeg.cgi",
+            "/livestream.cgi",
+            "/stream.cgi",
             "/live",
             "/live.mjpeg",
+            "/live/0",
+            "/live/1",
             "/mjpeg",
+            "/MJPEG",
             "/video",
             "/stream",
+            "/webcam",
+            "/video.mjpg",
+            "/mjpg/video.mjpg",
             "/cgi-bin/hi3510/mjpegstream.cgi?-chn=11"
     };
 
     private static final int[] PORTS = new int[] {80, 8080, 8081, 554, 8554, 7070, 7878, 3333};
+    private static final int[] HTTP_PORTS = new int[] {8080, 8081, 80};
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -189,12 +202,14 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            for (String path : HTTP_PATHS) {
-                String url = String.format(Locale.US, "http://%s%s", host, path);
-                append("Deneniyor: " + url);
-                if (tryMjpeg(wifi, url)) {
-                    setStatus("Canli yayin bulundu: " + url);
-                    return;
+            for (int port : HTTP_PORTS) {
+                for (String path : HTTP_PATHS) {
+                    String url = String.format(Locale.US, "http://%s:%d%s", host, port, path);
+                    append("Deneniyor: " + url);
+                    if (tryMjpeg(wifi, url)) {
+                        setStatus("Canli yayin bulundu: " + url);
+                        return;
+                    }
                 }
             }
             setStatus("HTTP canli yayin bulunamadi.");
@@ -248,8 +263,8 @@ public class MainActivity extends Activity {
         try {
             URLConnection urlConnection = network.openConnection(new URL(urlString));
             conn = (HttpURLConnection) urlConnection;
-            conn.setConnectTimeout(1200);
-            conn.setReadTimeout(2500);
+            conn.setConnectTimeout(900);
+            conn.setReadTimeout(1400);
             conn.setRequestProperty("User-Agent", "Q28Interkom/0.1");
             int code = conn.getResponseCode();
             String contentType = conn.getContentType();
