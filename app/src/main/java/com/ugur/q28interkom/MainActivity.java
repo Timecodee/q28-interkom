@@ -23,6 +23,8 @@ import android.widget.TextView;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -35,6 +37,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import javax.net.SocketFactory;
+
+import generalplus.com.GPCamLib.CamWrapper;
 
 public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -134,6 +138,21 @@ public class MainActivity extends Activity {
         nativeParams.setMargins(dp(8), 0, 0, 0);
         buttons.addView(nativeTest, nativeParams);
 
+        LinearLayout diagButtons = new LinearLayout(this);
+        diagButtons.setOrientation(LinearLayout.HORIZONTAL);
+        diagButtons.setPadding(0, 0, 0, dp(12));
+        root.addView(diagButtons, new LinearLayout.LayoutParams(-1, -2));
+
+        Button raw = button("Raw oku");
+        raw.setOnClickListener(v -> rawProbe());
+        diagButtons.addView(raw, new LinearLayout.LayoutParams(0, dp(48), 1));
+
+        Button gpcam = button("GPCam dene");
+        gpcam.setOnClickListener(v -> tryGpcam());
+        LinearLayout.LayoutParams gpcamParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+        gpcamParams.setMargins(dp(8), 0, 0, 0);
+        diagButtons.addView(gpcam, gpcamParams);
+
         preview = new ImageView(this);
         preview.setBackgroundColor(Color.rgb(15, 23, 42));
         preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -230,6 +249,82 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void rawProbe() {
+        String host = hostInput.getText().toString().trim();
+        setStatus("Ham port cevabi okunuyor...");
+        worker.submit(() -> {
+            Network wifi = bindToWifiNetwork();
+            if (wifi == null) {
+                setStatus("Q28 WiFi agi uygulamaya baglanamadi.");
+                appendNetworkState();
+                return;
+            }
+            for (int port : new int[] {8080, 8081}) {
+                append("RAW port deneniyor: " + port);
+                append(rawHttpProbe(wifi, host, port));
+            }
+            setStatus("Raw okuma tamamlandi.");
+        });
+    }
+
+    private void tryGpcam() {
+        String host = hostInput.getText().toString().trim();
+        setStatus("GPCam baglantisi deneniyor...");
+        worker.submit(() -> {
+            Network wifi = bindToWifiNetwork();
+            if (wifi == null) {
+                setStatus("Q28 WiFi agi uygulamaya baglanamadi.");
+                appendNetworkState();
+                return;
+            }
+
+            append(NativeLoader.load());
+            CamWrapper wrapper = CamWrapper.getComWrapperInstance();
+            wrapper.setGoPlusMsgListener(new CamWrapper.GoPlusMsgListener() {
+                @Override
+                public void onStatus(int status, int arg1, int arg2, int arg3, int arg4, byte[] data) {
+                    append("GPCam status cb: " + status + "," + arg1 + "," + arg2 + "," + arg3 + "," + arg4 + " data=" + (data == null ? 0 : data.length));
+                }
+
+                @Override
+                public void onData(boolean isVideo, int type, byte[] data) {
+                    append("GPCam data cb: video=" + isVideo + " type=" + type + " len=" + (data == null ? 0 : data.length));
+                }
+            });
+
+            int[] modes = new int[] {0, 1, 2, 8080, 8081};
+            for (int mode : modes) {
+                try {
+                    append("GPCamConnectToDevice host=" + host + " mode=" + mode);
+                    int ret = wrapper.GPCamConnectToDevice(host, mode);
+                    append("GPCam connect ret=" + ret);
+                    try {
+                        append("GPCamGetStatus=" + wrapper.GPCamGetStatus());
+                    } catch (Throwable statusError) {
+                        append("GPCamGetStatus hata: " + statusError.getClass().getSimpleName());
+                    }
+                    try {
+                        append("GPCamSendGetStatus=" + wrapper.GPCamSendGetStatus());
+                    } catch (Throwable statusError) {
+                        append("GPCamSendGetStatus hata: " + statusError.getClass().getSimpleName());
+                    }
+                    try {
+                        append("GPCamSendRestartStreaming=" + wrapper.GPCamSendRestartStreaming());
+                    } catch (Throwable streamError) {
+                        append("RestartStreaming hata: " + streamError.getClass().getSimpleName());
+                    }
+                    if (ret >= 0) {
+                        setStatus("GPCam denemesi tamamlandi: ret=" + ret);
+                        return;
+                    }
+                } catch (Throwable t) {
+                    append("GPCam hata mode=" + mode + " -> " + t.getClass().getSimpleName() + ": " + safe(t.getMessage()));
+                }
+            }
+            setStatus("GPCam baglanti denemesi bitti.");
+        });
+    }
+
     private Network bindToWifiNetwork() {
         ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         if (cm == null) {
@@ -255,6 +350,28 @@ public class MainActivity extends Activity {
             return true;
         } catch (IOException ignored) {
             return false;
+        }
+    }
+
+    private String rawHttpProbe(Network network, String host, int port) {
+        SocketFactory socketFactory = network.getSocketFactory();
+        try (Socket socket = socketFactory.createSocket()) {
+            socket.connect(new InetSocketAddress(host, port), 1000);
+            socket.setSoTimeout(1200);
+
+            OutputStream out = socket.getOutputStream();
+            out.write(("GET / HTTP/1.0\r\nHost: " + host + "\r\n\r\n").getBytes());
+            out.flush();
+
+            InputStream in = socket.getInputStream();
+            byte[] buffer = new byte[96];
+            int read = in.read(buffer);
+            if (read <= 0) {
+                return "RAW " + port + ": veri yok";
+            }
+            return "RAW " + port + " len=" + read + " hex=" + toHex(buffer, read) + " ascii=" + toAscii(buffer, read);
+        } catch (Throwable t) {
+            return "RAW " + port + " hata: " + t.getClass().getSimpleName() + " " + safe(t.getMessage());
         }
     }
 
@@ -332,6 +449,30 @@ public class MainActivity extends Activity {
 
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private String toHex(byte[] data, int length) {
+        StringBuilder out = new StringBuilder();
+        int limit = Math.min(length, 48);
+        for (int i = 0; i < limit; i++) {
+            if (i > 0) out.append(' ');
+            out.append(String.format(Locale.US, "%02X", data[i] & 0xFF));
+        }
+        return out.toString();
+    }
+
+    private String toAscii(byte[] data, int length) {
+        StringBuilder out = new StringBuilder();
+        int limit = Math.min(length, 80);
+        for (int i = 0; i < limit; i++) {
+            int c = data[i] & 0xFF;
+            if (c >= 32 && c <= 126) {
+                out.append((char) c);
+            } else {
+                out.append('.');
+            }
+        }
+        return out.toString();
     }
 
     private int dp(int value) {
