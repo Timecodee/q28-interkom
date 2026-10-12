@@ -55,6 +55,8 @@ public class MainActivity extends Activity {
     private volatile boolean streaming;
     private String[] rtspCandidates = new String[0];
     private int rtspIndex;
+    private int rtspPlayGeneration;
+    private boolean rtspPrepared;
 
     private static final String[] HTTP_PATHS = new String[] {
             "/",
@@ -82,8 +84,9 @@ public class MainActivity extends Activity {
     private static final int[] PORTS = new int[] {80, 8080, 8081, 554, 8554, 7070, 7878, 3333};
     private static final int[] HTTP_PORTS = new int[] {8080, 8081, 80};
     private static final String[] RTSP_PATHS = new String[] {
-            "/",
             "/live",
+            "/11",
+            "/",
             "/stream",
             "/video",
             "/videostream",
@@ -92,8 +95,7 @@ public class MainActivity extends Activity {
             "/1",
             "/ch0_0.264",
             "/ch1_0.264",
-            "/cam1/h264",
-            "/11"
+            "/cam1/h264"
     };
 
     @Override
@@ -198,6 +200,7 @@ public class MainActivity extends Activity {
         videoView.setBackgroundColor(Color.rgb(15, 23, 42));
         videoView.setVisibility(View.GONE);
         videoView.setOnPreparedListener(mp -> {
+            rtspPrepared = true;
             setStatus("RTSP oynuyor.");
             append("RTSP hazir: " + currentRtspUrl());
             mp.setOnVideoSizeChangedListener((player, width, height) -> append("RTSP video size=" + width + "x" + height));
@@ -497,7 +500,7 @@ public class MainActivity extends Activity {
             out.flush();
 
             InputStream in = socket.getInputStream();
-            byte[] buffer = new byte[512];
+            byte[] buffer = new byte[1024];
             int read = in.read(buffer);
             if (read <= 0) {
                 return "RTSP " + method + " " + url + ": veri yok";
@@ -516,12 +519,20 @@ public class MainActivity extends Activity {
             return;
         }
         String url = rtspCandidates[rtspIndex];
+        int generation = ++rtspPlayGeneration;
+        rtspPrepared = false;
         append("RTSP oynatiliyor: " + url);
         preview.setVisibility(View.GONE);
         videoView.setVisibility(View.VISIBLE);
         videoView.stopPlayback();
         videoView.setVideoURI(Uri.parse(url));
         videoView.start();
+        main.postDelayed(() -> {
+            if (generation == rtspPlayGeneration && !rtspPrepared) {
+                append("RTSP timeout, sonraki aday deneniyor: " + url);
+                playNextRtspCandidate();
+            }
+        }, 6000);
     }
 
     private void playNextRtspCandidate() {
@@ -624,7 +635,7 @@ public class MainActivity extends Activity {
 
     private String toAscii(byte[] data, int length) {
         StringBuilder out = new StringBuilder();
-        int limit = Math.min(length, 80);
+        int limit = Math.min(length, 480);
         for (int i = 0; i < limit; i++) {
             int c = data[i] & 0xFF;
             if (c >= 32 && c <= 126) {

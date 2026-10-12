@@ -19,12 +19,14 @@ Bilinen cihaz bilgileri:
 - Yaygin HTTP/MJPEG canli yayin adreslerini dener.
 - NiceDVR XAPK icinden cikan TUTK/GPCam native kutuphanelerini yuklemek icin `Native test` butonu icerir.
 - `com/weapons18/api/v` ve `generalplus/com/GPCamLib/CamWrapper` JNI kopru siniflari projeye eklendi.
+- `8080` portunda RTSP `OPTIONS/DESCRIBE` denemesi yapar ve `VideoView` ile RTSP oynatmayi dener.
 - Bulut ortaminda debug APK uretmek icin GitHub Actions dosyasi icerir.
 
 ## Onemli teknik not
 
 NiceDVR calistigi, Roadcam calismadigi icin Q28'in Roadcam/iCatch yerine TUTK/GPCam tarzinda bir baglanti katmani kullandigi gorunuyor.
-Bu yuzden tam canli goruntu/kayit kontrolu icin NiceDVR XAPK tekrar analiz edilip native baglanti katmani eklenmeli.
+Son testlerde `8080` portu HTTP degil RTSP olarak cevap verdi: `RTSP/1.0 200 OK`.
+Canli goruntu icin en olasi adresler `rtsp://192.168.25.1:8080/live`, `rtsp://192.168.25.1:8080/11` ve `rtsp://192.168.25.1:8080/`.
 
 NiceDVR XAPK tekrar yuklenince su betik gerekli `.so` dosyalarini projeye koymak icin kullanilacak:
 
