@@ -27,11 +27,14 @@ import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URL;
+import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import javax.net.SocketFactory;
 
 public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -147,9 +150,17 @@ public class MainActivity extends Activity {
         setStatus("Portlar taraniyor...");
         append("Tarama basladi: " + host);
         worker.submit(() -> {
+            Network wifi = bindToWifiNetwork();
+            if (wifi == null) {
+                setStatus("Q28 WiFi agi uygulamaya baglanamadi.");
+                append("WiFi network bulunamadi. Q28interkom agina bagli oldugundan emin ol.");
+                appendNetworkState();
+                return;
+            }
+
             List<String> open = new ArrayList<>();
             for (int port : PORTS) {
-                if (isOpen(host, port, 800)) {
+                if (isOpen(wifi, host, port, 800)) {
                     open.add(String.valueOf(port));
                     append("Acik port bulundu: " + port);
                 }
@@ -170,10 +181,18 @@ public class MainActivity extends Activity {
         setStatus("Canli yayin adresleri deneniyor...");
         append("HTTP/MJPEG adaylari deneniyor.");
         worker.submit(() -> {
+            Network wifi = bindToWifiNetwork();
+            if (wifi == null) {
+                setStatus("Q28 WiFi agi uygulamaya baglanamadi.");
+                append("WiFi network bulunamadi. Q28interkom agina bagli oldugundan emin ol.");
+                appendNetworkState();
+                return;
+            }
+
             for (String path : HTTP_PATHS) {
                 String url = String.format(Locale.US, "http://%s%s", host, path);
                 append("Deneniyor: " + url);
-                if (tryMjpeg(url)) {
+                if (tryMjpeg(wifi, url)) {
                     setStatus("Canli yayin bulundu: " + url);
                     return;
                 }
@@ -196,8 +215,27 @@ public class MainActivity extends Activity {
         });
     }
 
-    private boolean isOpen(String host, int port, int timeoutMs) {
-        try (Socket socket = new Socket()) {
+    private Network bindToWifiNetwork() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (cm == null) {
+            append("ConnectivityManager yok.");
+            return null;
+        }
+
+        for (Network network : cm.getAllNetworks()) {
+            NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+            if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                ConnectivityManager.setProcessDefaultNetwork(network);
+                append("Uygulama WiFi agina baglandi: " + network);
+                return network;
+            }
+        }
+        return null;
+    }
+
+    private boolean isOpen(Network network, String host, int port, int timeoutMs) {
+        SocketFactory socketFactory = network.getSocketFactory();
+        try (Socket socket = socketFactory.createSocket()) {
             socket.connect(new InetSocketAddress(host, port), timeoutMs);
             return true;
         } catch (IOException ignored) {
@@ -205,10 +243,11 @@ public class MainActivity extends Activity {
         }
     }
 
-    private boolean tryMjpeg(String urlString) {
+    private boolean tryMjpeg(Network network, String urlString) {
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) new URL(urlString).openConnection();
+            URLConnection urlConnection = network.openConnection(new URL(urlString));
+            conn = (HttpURLConnection) urlConnection;
             conn.setConnectTimeout(1200);
             conn.setReadTimeout(2500);
             conn.setRequestProperty("User-Agent", "Q28Interkom/0.1");
@@ -255,6 +294,17 @@ public class MainActivity extends Activity {
         Network network = cm == null ? null : cm.getActiveNetwork();
         NetworkCapabilities caps = network == null ? null : cm.getNetworkCapabilities(network);
         append("WiFi aktif: " + (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)));
+        if (cm != null) {
+            for (Network item : cm.getAllNetworks()) {
+                NetworkCapabilities itemCaps = cm.getNetworkCapabilities(item);
+                if (itemCaps != null) {
+                    append("Network " + item + " WiFi=" + itemCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                            + " Cellular=" + itemCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                            + " Internet=" + itemCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                            + " Validated=" + itemCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED));
+                }
+            }
+        }
     }
 
     private void setStatus(String value) {
